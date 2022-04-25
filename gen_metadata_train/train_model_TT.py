@@ -71,7 +71,7 @@ def main(config_data, enhance_contrast=ENHANCE):
     cfg.merge_from_file("config/mask_rcnn_R_50_FPN_3x.yaml")
     cfg.DATASETS.TRAIN = tuple(train)
     cfg.DATASETS.TEST = ()  # no metrics implemented yet
-    cfg.DATALOADER.NUM_WORKERS = 2
+    cfg.DATALOADER.NUM_WORKERS = 8
     # initialize from model zoo
     cfg.MODEL.WEIGHTS = "detectron2://COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x/137849600/model_final_f10217.pkl"
     cfg.SOLVER.IMS_PER_BATCH = 8
