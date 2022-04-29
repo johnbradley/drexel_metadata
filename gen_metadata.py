@@ -1,3 +1,8 @@
+#!/usr/local/bin/python
+'''
+This is Kevin Karnani code, modified by thibault tabarin for containerization
+
+'''
 import json
 import math
 import os
@@ -20,37 +25,44 @@ from scipy import stats
 from skimage import filters, measure
 from skimage.morphology import flood_fill
 from torch.multiprocessing import Pool
-
+import warnings
+warnings.filterwarnings("ignore")
 # torch.multiprocessing.set_start_method('forkserver')
 
+# ensure the look at the right place for the configuration file
+root_file_path = os.path.dirname(__file__)
+
 VAL_SCALE_FAC = 0.5
-conf = json.load(open('config/config.json', 'r'))
+conf = json.load(open(os.path.join(root_file_path,'config/config.json'), 'r'))
 ENHANCE = bool(conf['ENHANCE'])
 JOEL = bool(conf['JOEL'])
+PROCESSOR = conf['PROCESSOR']
 IOU_PCT = .02
 
-with open('config/mask_rcnn_R_50_FPN_3x.yaml', 'r') as f:
+with open(os.path.join(root_file_path,'config/mask_rcnn_R_50_FPN_3x.yaml'), 'r') as f:
     iters = yaml.load(f, Loader=yaml.FullLoader)["SOLVER"]["MAX_ITER"]
 
 
-def init_model(enhance_contrast=ENHANCE, joel=JOEL, processor='cpu'):
+def init_model(enhance_contrast=ENHANCE, joel=JOEL, processor=PROCESSOR):
     """
     Initialize model using config files for RCNN, the trained weights, and other parameters.
 
     Returns:
         predictor -- DefaultPredictor(**configs).
     """
+    root_file_path = os.path.dirname(__file__)
     cfg = get_cfg()
-    cfg.merge_from_file("config/mask_rcnn_R_50_FPN_3x.yaml")
+    cfg.merge_from_file(os.path.join(root_file_path,'config/mask_rcnn_R_50_FPN_3x.yaml'))
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 5
+    OUTPUT_DIR = os.path.join(root_file_path, 'output')
     if not joel:
-        cfg.OUTPUT_DIR += f"/non_enhanced" if not enhance_contrast else f"/enhanced"
+        OUTPUT_DIR += f"/non_enhanced" if not enhance_contrast else f"/enhanced"
         # cfg.OUTPUT_DIR += f"/non_enhanced_{iters}" if not enhance_contrast else f"/enhanced_{iters}"
-    cfg.MODEL.WEIGHTS = os.path.join(cfg.OUTPUT_DIR, "model_final.pth")
+    cfg.MODEL.WEIGHTS = os.path.join(OUTPUT_DIR, "model_final.pth")
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.3
     cfg.MODEL.DEVICE = processor
     predictor = DefaultPredictor(cfg)
-    
+
     return predictor
 
 
@@ -137,14 +149,17 @@ def gen_metadata(file_path, enhance_contrast=ENHANCE, visualize=False, multiple_
     if visualize:
         cv2.imshow('prediction', np.array(vis.get_image()[:, :, ::-1], dtype=np.uint8))
         cv2.waitKey(0)
-    os.makedirs('images', exist_ok=True)
-    os.makedirs('images/enhanced', exist_ok=True)
-    os.makedirs('images/non_enhanced', exist_ok=True)
-    dirname = 'images/'
-    dirname += 'enhanced/' if enhance_contrast else 'non_enhanced/'
-    print(file_name)
-    cv2.imwrite(f'{dirname}/gen_prediction_{f_name}.png',
-                vis.get_image()[:, :, ::-1])
+
+    if False:    # to save visualization of the prediction
+        os.makedirs('images', exist_ok=True)
+        os.makedirs('images/enhanced', exist_ok=True)
+        os.makedirs('images/non_enhanced', exist_ok=True)
+        dirname = 'images/'
+        dirname += 'enhanced/' if enhance_contrast else 'non_enhanced/'
+        print(file_name)
+        cv2.imwrite(f'{dirname}/gen_prediction_{f_name}.png',
+                    vis.get_image()[:, :, ::-1])
+
     skippable_fish = []
     fish_length = 0
     if fish:
@@ -193,6 +208,15 @@ def gen_metadata(file_path, enhance_contrast=ENHANCE, visualize=False, multiple_
             val = adaptive_threshold(bbox, im_gray)
             bbox, mask, pixel_anal_failed = gen_mask(bbox, file_path,
                                                      file_name, im_gray, val, detectron_mask)
+
+            mask_uint8 = np.where(mask == 1, 255, 0).astype(np.uint8)
+
+            if False: # Activate with True to save the upgraded mask generate by gen_mask()
+                os.makedirs('mask', exist_ok=True)
+                dirname = 'mask/'
+                print("save mask for",file_name)
+                cv2.imwrite(f'{dirname}/mask_{f_name}.png',mask_uint8)
+
             centroid, evecs, cont_length, cont_width, length, width, area = pca(mask, scale)
             major, minor = evecs[0], evecs[1]
 
@@ -299,7 +323,7 @@ def gen_metadata(file_path, enhance_contrast=ENHANCE, visualize=False, multiple_
     results['fish_count'] = len(insts[(insts.pred_classes == 0).logical_and(insts.scores > 0.3)]) - \
                             len(skippable_fish) if multiple_fish else int(results['has_fish'])
     results['detected_fish_count'] = fish_length
-    return {f_name: results}
+    return {f_name: results}, mask_uint8
 
 
 def gen_metadata_upscale(file_path, fish):
@@ -863,17 +887,6 @@ def gen_mask(bbox, file_path, file_name, im_gray, val, detectron_mask, flipped=F
         new_mask = detectron_mask.astype('uint8')
         bbox = bbox_orig
         failed = True
-    # arr4 = np.where(new_mask == 1, 255, 0).astype(np.uint8)
-    # (left, top, right, bottom) = shrink_bbox(new_mask)
-    # arr4[top:bottom, left] = 175
-    # arr4[top:bottom, right] = 175
-    # arr4[top, left:right] = 175
-    # arr4[bottom, left:right] = 175
-    # im2 = Image.fromarray(arr4, 'L')
-    # dirname = 'images/'
-    # dirname += 'enhanced/' if ENHANCE else 'non_enhanced/'
-    # f_name = file_name.split('.')[0]
-    # im2.save(f'{dirname}/gen_mask_{f_name}.png')
     return bbox, new_mask, failed
 
 
@@ -899,55 +912,38 @@ def gen_mask_upscale(bbox, file_path, file_name, im_gray, val, detectron_mask):
     return bbox, new_mask, failed
 
 
-# https://stackoverflow.com/questions/31400769/bounding-box-of-numpy-array
-def shrink_bbox(mask):
-    """
-    Finds the bounding box of an image.
-    """
-    rows = np.any(mask, axis=1)
-    cols = np.any(mask, axis=0)
-    rmin, rmax = np.where(rows)[0][[0, -1]]
-    cmin, cmax = np.where(cols)[0][[0, -1]]
-
-    return cmin, rmin, cmax, rmax
-
-
 def gen_metadata_safe(file_path):
     """
     Deals with erroneous metadata generation errors.
     """
     try:
-        return gen_metadata(file_path)
+        result, mask_uint8 = gen_metadata(file_path)
+        return result, mask_uint8
     except Exception as e:
         print(f'{file_path}: Errored out ({e})')
         return {file_path: {'errored': True}}
 
 
-def main():
-    direct = sys.argv[1]
-    if os.path.isdir(direct):
-        files = [entry.path for entry in os.scandir(direct)]
-        if len(sys.argv) > 2:
-            files = files[:int(sys.argv[2])]
-    else:
-        files = [direct]
-    with Pool(2) as p:
-        results = p.map(gen_metadata_safe, files)
-    # results = map(gen_metadata_safe, files)
-    output = {}
-    for i in results:
-        output[list(i.keys())[0]] = list(i.values())[0]
-    fname = f'metadata_{iters}.json' if not JOEL else 'metadata.json'
-    if ENHANCE:
-        fname = 'enhanced_' + fname
-    else:
-        fname = 'non_enhanced_' + fname
-    if len(output) > 1:
-        with open(fname, 'w') as f:
-            json.dump(output, f)
-    else:
-        pprint.pprint(output)
+def main(input_file, output_result, output_mask=None):
 
+    result, mask_uint8 = gen_metadata_safe(input_file)
+
+    with open(output_result, 'w') as f:
+            json.dump(result, f)
+
+    if output_mask != None:
+        cv2.imwrite(output_mask, mask_uint8)
+
+    return print('This is the user version 2.1!')
 
 if __name__ == '__main__':
-    main()
+
+    if len(sys.argv) > 2: # case with 2 arguments input
+        input_file = sys.argv[1]
+        output_json = sys.argv[2]
+        output_mask = None
+
+    if len(sys.argv) == 4 : # case if there is a 3rd argument input
+        output_mask = sys.argv[3]
+
+    main(input_file, output_json, output_mask)
