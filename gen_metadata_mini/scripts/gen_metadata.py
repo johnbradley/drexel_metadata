@@ -921,7 +921,7 @@ def gen_metadata_safe(file_path):
         return result, mask_uint8
     except Exception as e:
         print(f'{file_path}: Errored out ({e})')
-        return {file_path: {'errored': True}}
+        return {file_path: {'errored': True}}, ''
 
 
 def main(input_file, output_result, output_mask=None):

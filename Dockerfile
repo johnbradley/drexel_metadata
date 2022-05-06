@@ -1,8 +1,10 @@
 FROM python:3.8.10-slim-buster
 
-# Install gcc and git
+# Install gcc, libGL, libgthread and git
 RUN apt update && apt install -y \
    build-essential \
+   libgl1 \
+   libglib2.0-0 \
    git \
    && rm -rf /var/lib/apt/lists/*
 
@@ -11,7 +13,14 @@ RUN apt update && apt install -y \
 RUN python -m pip install pipenv gdown setuptools==57.5.0
 
 # Install rquirements from Pipfile
-ADD Pipfile /Pipfile
-RUN pipenv install --skip-lock --system
+ADD Pipfile /pipeline/Pipfile
+RUN PIPENV_PIPFILE=/pipeline/Pipfile pipenv install --skip-lock --system
 
-#TODO load_models.sh
+WORKDIR /pipeline
+ENV MODEL_URL=https://drive.google.com/uc?id=13pa5E5odN_gWNZYkA12u8ZEnEjzWGxFL
+RUN mkdir -p /pipeline/output/enhanced \
+   && gdown --no-cookies -O /pipeline/output/enhanced/ $MODEL_URL \
+   && mv output/enhanced/* output/enhanced/model_final.pth
+
+ADD gen_metadata_mini/scripts/gen_metadata.py /pipeline/gen_metadata.py
+ADD gen_metadata_mini/scripts/config/ /pipeline/config/
